@@ -1,0 +1,51 @@
+TURING LAB — SIMULADOR DE MÁQUINA DE TURING
+
+REQUISITOS Y EJECUCIÓN
+Python 3.9 o posterior con tkinter. No requiere paquetes pip.
+Extrae el ZIP, abre la carpeta maquina_turing en VS Code y ejecuta:
+  python simulador.py
+En Windows también: py simulador.py
+En Linux: python3 simulador.py; si falta tkinter, instala python3-tk.
+Es un programa de escritorio; no es una aplicación Android.
+
+NOVEDADES
+Interfaz organizada en pestañas, cinta centrada en el cabezal,
+regla siguiente resaltada y explicación de cada transición.
+Paso, ejecución automática, pausa, reinicio y retroceso.
+Historial de transiciones exportable como CSV.
+Configuraciones guardables y recuperables en JSON.
+Velocidad y máximo de pasos ajustables.
+
+EJEMPLOS
+0^n1^n: acepta 01, 0011, 000111 y la cadena vacía.
+Incremento binario: 1011 produce 1100; 111 produce 1000.
+Inversión de bits: 101100 produce 010011.
+Paridad: acepta cadenas binarias con una cantidad par de unos.
+Las entradas de estos ejemplos deben usar solo 0 y 1.
+
+USO
+Selecciona un ejemplo, introduce la entrada y pulsa Reiniciar / aplicar.
+Pulsa Paso o Ejecutar. Pausar conserva la sesión. Retroceder deshace
+la última acción; funciona también al llegar a aceptación o detención.
+Editar entrada, estados o reglas requiere Reiniciar / aplicar.
+Guardar máquina conserva la configuración del editor, no la sesión.
+Abrir máquina inicia una nueva simulación.
+El historial CSV contiene las transiciones de la trayectoria actual;
+retroceder elimina la transición deshecha.
+
+FORMATO DE REGLAS
+Cada línea: estado_actual lee escribe dirección estado_siguiente
+Ejemplo: q0 0 1 R q0
+L = izquierda; R = derecha; S = sin movimiento; _ = blanco.
+Cada símbolo ocupa un carácter; # inicia un comentario.
+Los estados de aceptación y rechazo deben tener nombres diferentes.
+Se prohíben reglas duplicadas para el mismo estado y símbolo.
+La cinta se extiende en ambas direcciones.
+Sin transición: detención, no rechazo explícito.
+Máximo de pasos: pausa, no rechazo; aumenta el límite para continuar.
+El historial usa memoria proporcional a los pasos de la sesión.
+
+VERIFICACIÓN
+Desde la carpeta ejecuta: python -m unittest -v test_simulador.py
+Las pruebas comprueban los ejemplos, el retroceso, el formato JSON
+y la validación de reglas.
