@@ -1,495 +1,812 @@
-"""Simulador educativo de una máquina de Turing determinista de una cinta."""
+
 import tkinter as tk
-import json
-import csv
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 
-EJEMPLO = """# Estado Lee Escribe Movimiento Siguiente
-q0 0 X R q1
-q0 Y Y R q3
-q0 _ _ S aceptar
-q1 0 0 R q1
-q1 Y Y R q1
-q1 1 Y L q2
-q2 0 0 L q2
-q2 Y Y L q2
-q2 X X R q0
-q3 Y Y R q3
-q3 _ _ S aceptar
-"""
+BLANCO = "□"
+LIMITE = 100
 
 
-def leer_reglas(texto):
-    reglas = {}
-    for numero, linea in enumerate(texto.splitlines(), 1):
-        linea = linea.split("#", 1)[0].strip()
-        if not linea:
-            continue
-        partes = linea.split()
-        if len(partes) != 5:
-            raise ValueError(f"Línea {numero}: se requieren cinco campos.")
-        estado, lee, escribe, movimiento, siguiente = partes
-        if len(lee) != 1 or len(escribe) != 1:
-            raise ValueError(f"Línea {numero}: cada símbolo debe ser un carácter.")
-        if movimiento not in ("L", "R", "S"):
-            raise ValueError(f"Línea {numero}: movimiento válido: L, R o S.")
-        if (estado, lee) in reglas:
-            raise ValueError(f"Línea {numero}: transición duplicada para {estado}, {lee}.")
-        reglas[estado, lee] = (escribe, movimiento, siguiente)
-    if not reglas:
-        raise ValueError("Escribe al menos una transición.")
-    return reglas
+class Cinta:
+    def __init__(self):
+        self.celdas = {}
+        self.cabezal = 0
 
+    def leer(self):
+        return self.celdas.get(self.cabezal, BLANCO)
 
-class Maquina:
-    def __init__(self, entrada, reglas, inicial="q0", acepta="aceptar", rechaza="rechazar"):
-        if not inicial or not acepta or not rechaza or acepta == rechaza:
-            raise ValueError("Los estados deben tener nombre; aceptación y rechazo deben diferir.")
-        self.cinta = {i: c for i, c in enumerate(entrada) if c != "_"}
-        self.reglas = reglas
-        self.estado, self.acepta, self.rechaza = inicial, acepta, rechaza
-        self.cabezal = self.pasos = 0
-        self.motivo = ""
-        self.historial = []
+    def leer_posicion(self, posicion):
+        return self.celdas.get(posicion, BLANCO)
 
-    @property
-    def resultado(self):
-        if self.estado == self.acepta:
-            return "ACEPTADA"
-        if self.estado == self.rechaza:
-            return "RECHAZADA"
-        if self.motivo:
-            return "DETENIDA: " + self.motivo
-        return "EN EJECUCIÓN"
-
-    @property
-    def terminada(self):
-        return self.estado in (self.acepta, self.rechaza) or bool(self.motivo)
-
-    def paso(self):
-        if self.terminada:
-            return None
-        lee = self.cinta.get(self.cabezal, "_")
-        self.historial.append((self.estado, self.cabezal, lee, self.pasos, self.motivo))
-        regla = self.reglas.get((self.estado, lee))
-        if regla is None:
-            self.motivo = f"sin regla para ({self.estado}, {lee})"
-            return self.motivo
-        escribe, movimiento, siguiente = regla
-        mensaje = f"{self.pasos + 1}: ({self.estado}, {lee}) → ({siguiente}, {escribe}, {movimiento})"
-        if escribe == "_":
-            self.cinta.pop(self.cabezal, None)
+    def escribir(self, simbolo):
+        if simbolo == BLANCO:
+            self.celdas.pop(self.cabezal, None)
         else:
-            self.cinta[self.cabezal] = escribe
-        self.cabezal += {"L": -1, "R": 1, "S": 0}[movimiento]
-        self.estado = siguiente
-        self.pasos += 1
-        return mensaje
+            self.celdas[self.cabezal] = simbolo
 
-    def retroceder(self):
-        if not self.historial:
-            return False
-        estado, posicion, simbolo, pasos, motivo = self.historial.pop()
-        if simbolo == "_":
-            self.cinta.pop(posicion, None)
-        else:
-            self.cinta[posicion] = simbolo
-        self.estado, self.cabezal, self.pasos, self.motivo = estado, posicion, pasos, motivo
-        return True
+    def mover(self, direccion):
+        if direccion == "R":
+            self.cabezal += 1
+        elif direccion == "L":
+            self.cabezal -= 1
+        elif direccion != "S":
+            raise ValueError(f"Movimiento desconocido: {direccion}")
+
+    def cargar(self, texto):
+        self.celdas.clear()
+        self.cabezal = 0
+        for i, simbolo in enumerate(texto):
+            if simbolo != BLANCO:
+                self.celdas[i] = simbolo
 
 
-class Aplicacion:
-    def __init__(self, root):
-        self.root, self.maquina, self.ejecutando = root, None, False
-        root.title("Simulador de máquina de Turing")
-        root.geometry("1000x760")
-        root.minsize(680, 580)
-        principal = ttk.Frame(root, padding=16)
+class MaquinaTuring:
+    def __init__(self, ventana):
+        self.ventana = ventana
+        self.ventana.title("Maquina de Turing de tres cintas")
+
+       
+        self.ventana.update_idletasks()
+        ancho = self.ventana.winfo_screenwidth()
+        alto = self.ventana.winfo_screenheight()
+
+        ancho_ventana = min(1200, max(760, ancho - 40))
+        alto_ventana = min(850, max(540, alto - 100))
+
+        x = max(0, (ancho - ancho_ventana) // 2)
+        y = max(0, (alto - alto_ventana) // 2)
+
+        self.ventana.geometry(
+            f"{ancho_ventana}x{alto_ventana}+{x}+{y}"
+        )
+        self.ventana.minsize(700, 500)
+        self.ventana.protocol("WM_DELETE_WINDOW", self.cerrar)
+
+        self.cintas = [Cinta(), Cinta(), Cinta()]
+        self.estado = "q0"
+        self.pasos = []
+        self.indice = 0
+        self.ejecutando = False
+        self.after_id = None
+
+        self.numero_a = 0
+        self.numero_b = 0
+        self.op = "+"
+        self.resultado_finalizado = False
+
+        self.crear_interfaz()
+        self.dibujar_cintas()
+
+    
+
+    def crear_interfaz(self):
+        principal = ttk.Frame(self.ventana, padding=8)
         principal.pack(fill="both", expand=True)
-        ttk.Label(principal, text="MÁQUINA DE TURING", font=("Segoe UI", 20, "bold")).pack(anchor="w")
-        ttk.Label(principal, text="Cinta infinita · Cabezal de lectura/escritura · Reglas editables").pack(anchor="w", pady=(0, 12))
-        datos = ttk.Frame(principal)
-        datos.pack(fill="x")
-        self.entrada = tk.StringVar(value="0011")
-        self.inicial = tk.StringVar(value="q0")
-        self.acepta = tk.StringVar(value="aceptar")
-        self.rechaza = tk.StringVar(value="rechazar")
-        for col, (label, variable) in enumerate([
-            ("Entrada", self.entrada), ("Estado inicial", self.inicial),
-            ("Aceptación", self.acepta), ("Rechazo", self.rechaza)
-        ]):
-            ttk.Label(datos, text=label).grid(row=0, column=col, sticky="w")
-            ttk.Entry(datos, textvariable=variable).grid(row=1, column=col, sticky="ew", padx=(0, 8))
-            datos.columnconfigure(col, weight=1)
-        self.canvas = tk.Canvas(principal, height=125, bg="#eef3fa", highlightthickness=0)
-        self.canvas.pack(fill="x", pady=12)
-        self.canvas.bind("<Configure>", lambda event: self.dibujar())
-        self.estado = tk.StringVar()
-        ttk.Label(principal, textvariable=self.estado, font=("Segoe UI", 11, "bold")).pack(anchor="w")
-        botones = ttk.Frame(principal)
-        botones.pack(fill="x", pady=10)
-        for texto, funcion in [("Cargar / reiniciar", self.cargar), ("Paso", self.paso),
-                               ("Ejecutar", self.ejecutar), ("Pausar", self.pausar)]:
-            ttk.Button(botones, text=texto, command=funcion).pack(side="left", padx=(0, 5))
-        self.limite = tk.StringVar(value="10000")
-        ttk.Label(botones, text="Máx. pasos:").pack(side="left")
-        ttk.Entry(botones, textvariable=self.limite, width=8).pack(side="left")
-        self.velocidad = tk.IntVar(value=250)
-        ttk.Label(principal, text="Demora entre pasos (milisegundos)").pack(anchor="w")
-        tk.Scale(principal, from_=20, to=1000, orient="horizontal",
-                 variable=self.velocidad).pack(fill="x")
-        ttk.Label(principal, text="Reglas: estado  lee  escribe  L/R/S  siguiente.  _ = blanco; # = comentario").pack(anchor="w")
-        self.reglas = tk.Text(principal, height=12, font=("Consolas", 11), undo=True)
-        self.reglas.pack(fill="both", expand=True, pady=5)
-        self.reglas.insert("1.0", EJEMPLO)
-        ttk.Label(principal, text="Última transición").pack(anchor="w")
-        self.ultimo = tk.StringVar(value="Listo.")
-        ttk.Label(principal, textvariable=self.ultimo, wraplength=900).pack(anchor="w")
-        ttk.Label(principal, text="Ejemplo 0ⁿ1ⁿ: acepta 01, 0011, 000111 y la cadena vacía; detiene 0101 o 001.").pack(anchor="w", pady=(8, 0))
-        self.cargar()
 
-    def cargar(self):
+        principal.rowconfigure(2, weight=1)
+        principal.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            principal,
+            text="MAQUINA DE TURING MULTICINTA",
+            font=("Arial", 17, "bold")
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 6))
+
+        # Entradas compactas.
+        entrada = ttk.LabelFrame(
+            principal, text="Datos de entrada", padding=8
+        )
+        entrada.grid(row=1, column=0, sticky="ew", pady=4)
+
+        for columna in range(7):
+            entrada.columnconfigure(columna, weight=1)
+
+        ttk.Label(entrada, text="Numero A").grid(
+            row=0, column=0, padx=3
+        )
+        self.a = tk.StringVar(value="7")
+        ttk.Entry(
+            entrada, textvariable=self.a, width=8
+        ).grid(row=1, column=0, padx=3, sticky="ew")
+
+        ttk.Label(entrada, text="Operacion").grid(
+            row=0, column=1, padx=3
+        )
+        self.operacion = tk.StringVar(value="+")
+        ttk.Combobox(
+            entrada,
+            textvariable=self.operacion,
+            values=["+", "-", "*", "/"],
+            state="readonly",
+            width=5
+        ).grid(row=1, column=1, padx=3, sticky="ew")
+
+        ttk.Label(entrada, text="Numero B").grid(
+            row=0, column=2, padx=3
+        )
+        self.b = tk.StringVar(value="3")
+        ttk.Entry(
+            entrada, textvariable=self.b, width=8
+        ).grid(row=1, column=2, padx=3, sticky="ew")
+
+        ttk.Button(
+            entrada, text="Preparar", command=self.preparar
+        ).grid(row=1, column=3, padx=4, sticky="ew")
+
+        ttk.Button(
+            entrada, text="▶ Ejecutar", command=self.iniciar
+        ).grid(row=1, column=4, padx=4, sticky="ew")
+
+        ttk.Button(
+            entrada, text="Paso siguiente", command=self.paso
+        ).grid(row=1, column=5, padx=4, sticky="ew")
+
+        ttk.Button(
+            entrada, text="Pausar", command=self.pausar
+        ).grid(row=1, column=6, padx=4, sticky="ew")
+
+        
+        barra = ttk.Frame(principal)
+        barra.grid(row=2, column=0, sticky="nsew", pady=4)
+        barra.columnconfigure(0, weight=1)
+        barra.rowconfigure(1, weight=1)
+
+        info = ttk.Frame(barra)
+        info.grid(row=0, column=0, sticky="ew", pady=4)
+
+        self.estado_label = ttk.Label(
+            info, text="Estado: q0", font=("Arial", 10, "bold")
+        )
+        self.estado_label.pack(side="left", padx=5)
+
+        self.pasos_label = ttk.Label(info, text="Pasos: 0/0")
+        self.pasos_label.pack(side="left", padx=8)
+
+        self.resultado_label = ttk.Label(
+            info, text="Resultado: —", font=("Arial", 11, "bold")
+        )
+        self.resultado_label.pack(side="left", padx=8)
+
+        ttk.Label(info, text="Velocidad").pack(
+            side="left", padx=(12, 3)
+        )
+        self.velocidad = tk.IntVar(value=400)
+        ttk.Scale(
+            info,
+            from_=50,
+            to=1200,
+            variable=self.velocidad,
+            orient="horizontal",
+            length=110
+        ).pack(side="left", padx=3)
+
+        ttk.Button(
+            info, text="Reiniciar", command=self.reiniciar
+        ).pack(side="right", padx=3)
+
+        
+        self.pestanas = ttk.Notebook(barra)
+        self.pestanas.grid(
+            row=1, column=0, sticky="nsew", pady=4
+        )
+
+        pesta_cintas = ttk.Frame(self.pestanas, padding=8)
+        pesta_reglas = ttk.Frame(self.pestanas, padding=5)
+        pesta_historial = ttk.Frame(self.pestanas, padding=5)
+
+        self.pestanas.add(pesta_cintas, text="Cintas")
+        self.pestanas.add(pesta_reglas, text="Reglas de transicion")
+        self.pestanas.add(pesta_historial, text="Historial")
+
+        self.crear_panel_cintas(pesta_cintas)
+        self.crear_panel_reglas(pesta_reglas)
+        self.crear_panel_historial(pesta_historial)
+
+        ttk.Label(
+            principal,
+            text=(
+                "□ blanco | 1 unidad unaria | X marca procesada | "
+                "R derecha | L izquierda | S permanecer"
+            ),
+            font=("Arial", 9)
+        ).grid(row=3, column=0, sticky="ew", pady=(4, 0))
+
+    def crear_panel_cintas(self, panel):
+        panel.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            panel,
+            text="Visualizacion de las tres cintas",
+            font=("Arial", 11, "bold")
+        ).pack(anchor="w", pady=(0, 8))
+
+        self.lienzos = []
+        self.etiquetas_cabezal = []
+
+        for i in range(3):
+            fila = ttk.Frame(panel)
+            fila.pack(fill="x", pady=8)
+
+            ttk.Label(
+                fila,
+                text=f"Cinta {i + 1}",
+                width=9,
+                font=("Arial", 10, "bold")
+            ).pack(side="left")
+
+            lienzo = tk.Canvas(
+                fila,
+                height=82,
+                background="white",
+                highlightthickness=1,
+                highlightbackground="#999999"
+            )
+            lienzo.pack(side="left", fill="x", expand=True)
+
+            etiqueta = ttk.Label(
+                fila, text="Cabezal: 0", width=11
+            )
+            etiqueta.pack(side="left", padx=5)
+
+            self.lienzos.append(lienzo)
+            self.etiquetas_cabezal.append(etiqueta)
+
+            
+            lienzo.bind(
+                "<Configure>",
+                lambda evento: self.dibujar_cintas()
+            )
+
+        ttk.Label(
+            panel,
+            text=(
+                "La celda azul indica la posicion actual del cabezal. "
+                "Los numeros inferiores indican las posiciones."
+            ),
+            wraplength=800
+        ).pack(anchor="w", pady=8)
+
+    def crear_panel_reglas(self, panel):
+        panel.rowconfigure(0, weight=1)
+        panel.columnconfigure(0, weight=1)
+
+        columnas = (
+            "numero", "estado", "lee", "escribe",
+            "movimientos", "siguiente", "descripcion"
+        )
+
+        self.tabla_reglas = ttk.Treeview(
+            panel,
+            columns=columnas,
+            show="headings"
+        )
+
+        encabezados = {
+            "numero": "Paso",
+            "estado": "Estado actual",
+            "lee": "Lee C1/C2/C3",
+            "escribe": "Escribe C1/C2/C3",
+            "movimientos": "Movimientos",
+            "siguiente": "Estado siguiente",
+            "descripcion": "Accion"
+        }
+
+        anchos = {
+            "numero": 45,
+            "estado": 90,
+            "lee": 100,
+            "escribe": 110,
+            "movimientos": 100,
+            "siguiente": 100,
+            "descripcion": 270
+        }
+
+        for columna in columnas:
+            self.tabla_reglas.heading(
+                columna, text=encabezados[columna]
+            )
+            self.tabla_reglas.column(
+                columna,
+                width=anchos[columna],
+                minwidth=45,
+                stretch=(columna == "descripcion"),
+                anchor="center"
+            )
+
+        scroll_y = ttk.Scrollbar(
+            panel, orient="vertical",
+            command=self.tabla_reglas.yview
+        )
+        scroll_x = ttk.Scrollbar(
+            panel, orient="horizontal",
+            command=self.tabla_reglas.xview
+        )
+
+        self.tabla_reglas.configure(
+            yscrollcommand=scroll_y.set,
+            xscrollcommand=scroll_x.set
+        )
+
+        self.tabla_reglas.grid(
+            row=0, column=0, sticky="nsew"
+        )
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
+
+        self.tabla_reglas.tag_configure(
+            "actual", background="#bfdbfe"
+        )
+
+    def crear_panel_historial(self, panel):
+        panel.rowconfigure(0, weight=1)
+        panel.columnconfigure(0, weight=1)
+
+        self.historial = tk.Text(
+            panel,
+            font=("Consolas", 10),
+            wrap="word",
+            state="disabled"
+        )
+
+        scroll_y = ttk.Scrollbar(
+            panel,
+            orient="vertical",
+            command=self.historial.yview
+        )
+        scroll_x = ttk.Scrollbar(
+            panel,
+            orient="horizontal",
+            command=self.historial.xview
+        )
+
+        self.historial.configure(
+            yscrollcommand=scroll_y.set,
+            xscrollcommand=scroll_x.set
+        )
+
+        self.historial.grid(
+            row=0, column=0, sticky="nsew"
+        )
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
+
+        botones = ttk.Frame(panel)
+        botones.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
+
+        ttk.Button(
+            botones,
+            text="Limpiar historial",
+            command=self.limpiar_historial
+        ).pack(side="left")
+
+  
+
+    def registrar(self, mensaje):
+        self.historial.configure(state="normal")
+        self.historial.insert("end", mensaje + "\n")
+        self.historial.see("end")
+        self.historial.configure(state="disabled")
+
+    def limpiar_historial(self):
+        self.historial.configure(state="normal")
+        self.historial.delete("1.0", "end")
+        self.historial.configure(state="disabled")
+
+  
+
+    def preparar(self):
         self.pausar()
-        try:
-            nueva = Maquina(self.entrada.get(), leer_reglas(self.reglas.get("1.0", "end")),
-                            self.inicial.get().strip(), self.acepta.get().strip(),
-                            self.rechaza.get().strip())
-        except ValueError as error:
-            messagebox.showerror("Configuración inválida", str(error))
-            return
-        self.maquina = nueva
-        self.ultimo.set("Configuración cargada. Los cambios requieren cargar de nuevo.")
-        self.dibujar()
 
-    def dibujar(self):
-        if not self.maquina:
+        try:
+            texto_a = self.a.get().strip()
+            texto_b = self.b.get().strip()
+
+            if not texto_a.isdecimal() or not texto_b.isdecimal():
+                raise ValueError(
+                    "Introduce numeros enteros no negativos."
+                )
+
+            a = int(texto_a)
+            b = int(texto_b)
+            op = self.operacion.get()
+
+            if a > LIMITE or b > LIMITE:
+                raise ValueError(
+                    f"Los operandos deben estar entre 0 y {LIMITE}."
+                )
+
+            if op == "-" and a < b:
+                raise ValueError(
+                    "La resta produciria un resultado negativo."
+                )
+
+            if op == "/" and b == 0:
+                raise ValueError("No se puede dividir entre cero.")
+
+        except ValueError as error:
+            messagebox.showerror("Entrada incorrecta", str(error))
             return
-        m = self.maquina
-        self.canvas.delete("all")
-        ancho = max(self.canvas.winfo_width(), 100)
-        cantidad = max(1, int(ancho // 54))
-        if cantidad % 2 == 0:
-            cantidad -= 1
-        inicio = m.cabezal - cantidad // 2
-        offset = (ancho - cantidad * 54) / 2
-        for n in range(cantidad):
-            indice, x = inicio + n, offset + n * 54
-            activo = indice == m.cabezal
-            self.canvas.create_rectangle(x, 28, x + 50, 78,
-                                         fill="#c8e4ff" if activo else "white", outline="#8294ab")
-            self.canvas.create_text(x + 25, 53, text=m.cinta.get(indice, "_"), font=("Consolas", 18, "bold"))
-            self.canvas.create_text(x + 25, 91, text=str(indice), fill="#566477")
-            if activo:
-                self.canvas.create_text(x + 25, 14, text="▼", fill="#136ac1")
-        self.estado.set(f"Estado: {m.estado}   |   Cabezal: {m.cabezal}   |   Pasos: {m.pasos}   |   {m.resultado}")
+
+        self.reiniciar()
+
+        self.numero_a = a
+        self.numero_b = b
+        self.op = op
+
+        entrada_unaria = "1" * a + "#" + op + "#" + "1" * b
+        self.cintas[0].cargar(entrada_unaria)
+        self.cintas[1].cargar("")
+        self.cintas[2].cargar("")
+
+        self.pasos = self.generar_pasos(a, b, op)
+        self.indice = 0
+        self.estado = "q0"
+        self.resultado_finalizado = False
+
+        self.resultado_label.config(text="Resultado: pendiente")
+
+        self.registrar("=== MAQUINA PREPARADA ===")
+        self.registrar(f"Entrada: {a} {op} {b}")
+        self.registrar(f"Cinta 1: {entrada_unaria}")
+        self.registrar("Cinta 2: espacio de trabajo")
+        self.registrar("Cinta 3: salida")
+        self.registrar(f"Acciones planificadas: {len(self.pasos)}")
+        self.registrar("")
+
+        self.cargar_reglas_transicion()
+        self.actualizar_estado()
+        self.dibujar_cintas()
+
+        self.pestanas.select(0)
+
+   
+
+    def generar_pasos(self, a, b, op):
+        pasos = []
+
+        def agregar(estado, descripcion, cinta=None,
+                    simbolo=None, movimiento="S"):
+            pasos.append(
+                (estado, descripcion, cinta, simbolo, movimiento)
+            )
+
+        agregar("q0", "Iniciar y leer la entrada.")
+        agregar("q1", "Recorrer el primer operando.", 0, None, "R")
+        agregar("q2", "Preparar la cinta de trabajo.", 1, None, "R")
+        agregar("q3", "Identificar la operacion.")
+        agregar("q4", "Recorrer el segundo operando.", 0, None, "R")
+
+        if op == "+":
+            for i in range(a):
+                agregar("q5", f"Copiar unidad {i + 1} de A.",
+                        1, "1", "R")
+            for i in range(b):
+                agregar("q6", f"Copiar unidad {i + 1} de B.",
+                        2, "1", "R")
+
+        elif op == "-":
+            for i in range(b):
+                agregar("q5", f"Procesar unidad {i + 1} de B.",
+                        1, "X", "R")
+            for i in range(a - b):
+                agregar("q6", f"Copiar unidad restante {i + 1}.",
+                        2, "1", "R")
+
+        elif op == "*":
+            for grupo in range(b):
+                agregar("q5", f"Iniciar grupo {grupo + 1}.",
+                        1, None, "R")
+                for marca in range(a):
+                    agregar(
+                        "q6",
+                        f"Copiar unidad {marca + 1} del grupo {grupo + 1}.",
+                        2, "1", "R"
+                    )
+
+        elif op == "/":
+            cociente = a // b
+            residuo = a % b
+
+            for grupo in range(cociente):
+                agregar(
+                    "q5", f"Procesar grupo {grupo + 1} del divisor.",
+                    1, "X", "R"
+                )
+                for marca in range(b):
+                    agregar(
+                        "q6",
+                        f"Registrar unidad {marca + 1} del grupo {grupo + 1}.",
+                        2, "1", "R"
+                    )
+
+            agregar("q7", f"Registrar el residuo: {residuo}.")
+
+        agregar("qf", "Terminar la secuencia de acciones.")
+        return pasos
+
+
+    def cargar_reglas_transicion(self):
+        for elemento in self.tabla_reglas.get_children():
+            self.tabla_reglas.delete(elemento)
+
+        estado_actual = "q0"
+
+        for numero, paso in enumerate(self.pasos, start=1):
+            estado_siguiente, descripcion, indice_cinta, simbolo, movimiento = paso
+
+            escrituras = ["=", "=", "="]
+            movimientos = ["S", "S", "S"]
+
+            if indice_cinta is not None:
+                if simbolo is not None:
+                    escrituras[indice_cinta] = simbolo
+                movimientos[indice_cinta] = movimiento
+
+            self.tabla_reglas.insert(
+                "",
+                "end",
+                iid=str(numero),
+                values=(
+                    numero,
+                    estado_actual,
+                    "* / * / *",
+                    " / ".join(escrituras),
+                    " / ".join(movimientos),
+                    estado_siguiente,
+                    descripcion
+                )
+            )
+
+            estado_actual = estado_siguiente
+
+    def resaltar_regla_actual(self):
+        for elemento in self.tabla_reglas.get_children():
+            self.tabla_reglas.item(elemento, tags=())
+
+        numero = str(max(1, self.indice))
+
+        if self.tabla_reglas.exists(numero):
+            self.tabla_reglas.item(numero, tags=("actual",))
+            self.tabla_reglas.selection_set(numero)
+            self.tabla_reglas.focus(numero)
+            self.tabla_reglas.see(numero)
+
+   
+
+    def iniciar(self):
+        if not self.pasos:
+            messagebox.showinfo("Informacion", "Pulsa Preparar primero.")
+            return
+
+        if self.indice >= len(self.pasos) or self.ejecutando:
+            return
+
+        self.ejecutando = True
+        self.pestanas.select(0)
+        self.ejecutar_automatico()
+
+    def ejecutar_automatico(self):
+        if not self.ejecutando:
+            return
+
+        self.ejecutar_un_paso()
+
+        if self.ejecutando and self.indice < len(self.pasos):
+            demora = max(30, int(self.velocidad.get()))
+            self.after_id = self.ventana.after(
+                demora, self.ejecutar_automatico
+            )
+        else:
+            self.ejecutando = False
+            self.after_id = None
 
     def paso(self):
         self.pausar()
-        self.avanzar()
 
-    def avanzar(self):
-        if not self.maquina or self.maquina.terminada:
-            return False
-        try:
-            limite = int(self.limite.get())
-            if limite <= 0:
-                raise ValueError
-        except ValueError:
-            self.pausar()
-            messagebox.showerror("Límite inválido", "El máximo de pasos debe ser un entero positivo.")
-            return False
-        if self.maquina.pasos >= limite:
-            self.pausar()
-            self.ultimo.set("Límite alcanzado. Aumenta el máximo para continuar; no implica rechazo.")
-            return False
-        self.ultimo.set(self.maquina.paso())
-        self.dibujar()
-        return not self.maquina.terminada
+        if not self.pasos:
+            messagebox.showinfo("Informacion", "Pulsa Preparar primero.")
+            return
 
-    def ejecutar(self):
-        if not self.ejecutando:
-            self.ejecutando = True
-            self.tick()
+        self.ejecutar_un_paso()
 
-    def tick(self):
-        self.tarea = None
+    def ejecutar_un_paso(self):
+        if self.indice >= len(self.pasos):
+            return
+
+        estado_siguiente, descripcion, indice_cinta, simbolo, movimiento = (
+            self.pasos[self.indice]
+        )
+
+        estado_anterior = self.estado
+        lecturas = [cinta.leer() for cinta in self.cintas]
+
+        escrituras = ["=", "=", "="]
+        movimientos = ["S", "S", "S"]
+
+        if indice_cinta is not None:
+            cinta = self.cintas[indice_cinta]
+
+            if simbolo is not None:
+                cinta.escribir(simbolo)
+                escrituras[indice_cinta] = simbolo
+
+            movimientos[indice_cinta] = movimiento
+            cinta.mover(movimiento)
+
+        self.estado = estado_siguiente
+        self.indice += 1
+
+        self.registrar(
+            f"Paso {self.indice}: {estado_anterior} -> {estado_siguiente}"
+        )
+        self.registrar("Lee C1/C2/C3: " + " / ".join(lecturas))
+        self.registrar("Escribe: " + " / ".join(escrituras))
+        self.registrar("Movimientos: " + " / ".join(movimientos))
+        self.registrar("Accion: " + descripcion)
+        self.registrar("")
+
+        self.resaltar_regla_actual()
+        self.actualizar_estado()
+        self.dibujar_cintas()
+
+        if self.indice >= len(self.pasos):
+            self.finalizar()
+
+
+
+    def finalizar(self):
+        if self.resultado_finalizado:
+            return
+
+        a, b, op = self.numero_a, self.numero_b, self.op
+
+        if op == "+":
+            resultado = a + b
+            texto = str(resultado)
+        elif op == "-":
+            resultado = a - b
+            texto = str(resultado)
+        elif op == "*":
+            resultado = a * b
+            texto = str(resultado)
+        else:
+            resultado = a // b
+            residuo = a % b
+            texto = f"Cociente = {resultado}, residuo = {residuo}"
+
+        self.cintas[2].cargar("1" * resultado)
+        self.cintas[2].cabezal = 0
+
+        self.estado = "q_accept"
+        self.resultado_finalizado = True
+
+        self.resultado_label.config(text="Resultado: " + texto)
+        self.registrar("=== EJECUCION FINALIZADA ===")
+        self.registrar("Estado final: q_accept")
+        self.registrar("Resultado: " + texto)
+        self.registrar(
+            "Salida unaria: " +
+            ("1" * resultado if resultado > 0 else "ε (vacia)")
+        )
+        self.registrar("")
+
+        self.actualizar_estado()
+        self.dibujar_cintas()
+
         if self.ejecutando:
-            if self.avanzar():
-                self.tarea = self.root.after(self.velocidad.get(), self.tick)
-            else:
-                self.ejecutando = False
+            self.ejecutando = False
+            if self.after_id is not None:
+                try:
+                    self.ventana.after_cancel(self.after_id)
+                except tk.TclError:
+                    pass
+                self.after_id = None
+
+        self.pestanas.select(0)
+
+    def actualizar_estado(self):
+        self.estado_label.config(text=f"Estado: {self.estado}")
+        self.pasos_label.config(
+            text=f"Pasos: {self.indice}/{len(self.pasos)}"
+        )
 
     def pausar(self):
         self.ejecutando = False
-        if getattr(self, "tarea", None):
-            self.root.after_cancel(self.tarea)
-            self.tarea = None
 
+        if self.after_id is not None:
+            try:
+                self.ventana.after_cancel(self.after_id)
+            except tk.TclError:
+                pass
 
-EJEMPLOS = {
-    "Igual cantidad: 0ⁿ1ⁿ": ("0011", EJEMPLO,
-        "Empareja cada 0 con un 1. X e Y marcan los símbolos procesados. Acepta también la cadena vacía."),
-    "Incrementar número binario": ("1011", """q0 0 0 R q0
-q0 1 1 R q0
-q0 _ _ L suma
-suma 1 0 L suma
-suma 0 1 S aceptar
-suma _ 1 S aceptar
-""", "Suma uno a un número binario. Ejemplo: 1011 → 1100. La entrada vacía produce 1."),
-    "Invertir bits": ("101100", """q0 0 1 R q0
-q0 1 0 R q0
-q0 _ _ S aceptar
-""", "Cambia cada 0 por 1 y cada 1 por 0. Ejemplo: 101100 → 010011."),
-    "Cantidad par de unos": ("10101", """q0 0 0 R q0
-q0 1 1 R impar
-q0 _ _ S aceptar
-impar 0 0 R impar
-impar 1 1 R q0
-impar _ _ S rechazar
-""", "Acepta cadenas binarias con una cantidad par de unos, incluido cero.")
-}
+        self.after_id = None
 
+    def reiniciar(self):
+        self.pausar()
 
-def validar_configuracion(datos):
-    if not isinstance(datos, dict) or datos.get("version") != 1:
-        raise ValueError("Archivo de máquina inválido o versión incompatible.")
-    campos = ("entrada", "reglas", "inicial", "acepta", "rechaza")
-    if any(not isinstance(datos.get(c), str) for c in campos):
-        raise ValueError("Faltan campos de texto de la máquina.")
-    Maquina(datos["entrada"], leer_reglas(datos["reglas"]), datos["inicial"],
-            datos["acepta"], datos["rechaza"])
-    return datos
+        for cinta in self.cintas:
+            cinta.celdas.clear()
+            cinta.cabezal = 0
 
+        self.estado = "q0"
+        self.pasos = []
+        self.indice = 0
+        self.resultado_finalizado = False
 
-class AplicacionMejorada(Aplicacion):
-    def __init__(self, root):
-        self.root, self.maquina, self.ejecutando = root, None, False
-        self.tarea = None
-        root.title("Turing Lab — Simulador educativo")
-        root.geometry("1120x820")
-        root.minsize(850, 690)
-        root.configure(bg="#eef3fa")
-        estilo = ttk.Style(root)
-        estilo.theme_use("clam")
-        estilo.configure("TFrame", background="#eef3fa")
-        estilo.configure("TLabel", background="#eef3fa", foreground="#18304d")
-        estilo.configure("TButton", padding=(10, 7))
-        estilo.configure("Treeview", rowheight=27, font=("Segoe UI", 10))
-        principal = ttk.Frame(root, padding=18)
-        principal.pack(fill="both", expand=True)
-        titulo = ttk.Frame(principal)
-        titulo.pack(fill="x")
-        ttk.Label(titulo, text="TURING LAB", font=("Segoe UI", 24, "bold")).pack(side="left")
-        for texto, accion in [("Abrir máquina", self.abrir), ("Guardar máquina", self.guardar),
-                              ("Exportar historial", self.exportar)]:
-            ttk.Button(titulo, text=texto, command=accion).pack(side="right", padx=4)
-        ttk.Label(principal, text="Explora cómo una máquina lee, escribe y cambia de estado.").pack(anchor="w", pady=(4, 10))
-        ejemplos = ttk.Frame(principal)
-        ejemplos.pack(fill="x")
-        ttk.Label(ejemplos, text="Ejemplo:").pack(side="left")
-        self.ejemplo = tk.StringVar(value=next(iter(EJEMPLOS)))
-        selector = ttk.Combobox(ejemplos, textvariable=self.ejemplo, values=list(EJEMPLOS), state="readonly", width=32)
-        selector.pack(side="left", padx=8)
-        selector.bind("<<ComboboxSelected>>", self.seleccionar)
-        self.descripcion = tk.StringVar(value=EJEMPLOS[self.ejemplo.get()][2])
-        ttk.Label(principal, textvariable=self.descripcion, wraplength=1000).pack(anchor="w", pady=8)
-        datos = ttk.Frame(principal)
-        datos.pack(fill="x")
-        self.entrada = tk.StringVar(value="0011")
-        self.inicial, self.acepta, self.rechaza = tk.StringVar(value="q0"), tk.StringVar(value="aceptar"), tk.StringVar(value="rechazar")
-        for col, (label, variable) in enumerate([("Entrada", self.entrada), ("Estado inicial", self.inicial),
-                                                ("Aceptación", self.acepta), ("Rechazo", self.rechaza)]):
-            ttk.Label(datos, text=label).grid(row=0, column=col, sticky="w")
-            ttk.Entry(datos, textvariable=variable).grid(row=1, column=col, sticky="ew", padx=(0, 10))
-            datos.columnconfigure(col, weight=1)
-        self.canvas = tk.Canvas(principal, height=115, bg="#eef3fa", highlightthickness=0)
-        self.canvas.pack(fill="x", pady=5)
-        self.canvas.bind("<Configure>", lambda event: self.dibujar())
-        self.estado, self.ultimo = tk.StringVar(), tk.StringVar()
-        ttk.Label(principal, textvariable=self.estado, font=("Segoe UI", 11, "bold")).pack(anchor="w")
-        self.salida = tk.StringVar()
-        ttk.Label(principal, textvariable=self.salida, font=("Consolas", 11), wraplength=1000).pack(anchor="w", pady=5)
-        controles = ttk.Frame(principal)
-        controles.pack(fill="x")
-        for texto, accion in [("Reiniciar / aplicar", self.cargar), ("← Retroceder", self.atras),
-                              ("Paso →", self.paso), ("▶ Ejecutar", self.ejecutar), ("Pausar", self.pausar)]:
-            ttk.Button(controles, text=texto, command=accion).pack(side="left", padx=(0, 5))
-        self.limite = tk.StringVar(value="10000")
-        ttk.Label(controles, text="Máx. pasos").pack(side="left", padx=5)
-        ttk.Entry(controles, textvariable=self.limite, width=8).pack(side="left")
-        velocidad = ttk.Frame(principal)
-        velocidad.pack(fill="x", pady=5)
-        ttk.Label(velocidad, text="Demora (ms):").pack(side="left")
-        self.velocidad = tk.IntVar(value=250)
-        tk.Scale(velocidad, from_=20, to=1000, orient="horizontal", variable=self.velocidad,
-                 bg="#eef3fa", highlightthickness=0, length=300).pack(side="left")
-        ttk.Label(velocidad, text="Los cambios en entrada o reglas se aplican al reiniciar.").pack(side="left", padx=12)
-        tabs = ttk.Notebook(principal)
-        tabs.pack(fill="both", expand=True)
-        editor, historial, ayuda = ttk.Frame(tabs, padding=10), ttk.Frame(tabs, padding=10), ttk.Frame(tabs, padding=10)
-        tabs.add(editor, text="  Reglas de transición  ")
-        tabs.add(historial, text="  Historial de ejecución  ")
-        tabs.add(ayuda, text="  Cómo funciona  ")
-        ttk.Label(editor, text="Estado · Lee · Escribe · Dirección (L/R/S) · Siguiente estado").pack(anchor="w")
-        zona = ttk.Frame(editor)
-        zona.pack(fill="both", expand=True, pady=5)
-        self.reglas = tk.Text(zona, height=9, font=("Consolas", 12), undo=True, bg="#ffffff", fg="#18304d")
-        barra = ttk.Scrollbar(zona, command=self.reglas.yview)
-        self.reglas.configure(yscrollcommand=barra.set)
-        barra.pack(side="right", fill="y")
-        self.reglas.pack(fill="both", expand=True)
-        self.reglas.tag_configure("activa", background="#c8e4ff")
-        self.reglas.insert("1.0", EJEMPLO)
-        self.tabla = ttk.Treeview(historial, columns=("paso", "estado", "pos", "lee", "escribe", "dir", "sig"), show="headings")
-        for columna, nombre in zip(self.tabla["columns"], ["Paso", "Estado", "Posición", "Lee", "Escribe", "Dirección", "Siguiente"]):
-            self.tabla.heading(columna, text=nombre)
-            self.tabla.column(columna, width=100, anchor="center")
-        scroll = ttk.Scrollbar(historial, command=self.tabla.yview)
-        self.tabla.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
-        self.tabla.pack(fill="both", expand=True)
-        ttk.Label(ayuda, text=(
-            "1. Selecciona un ejemplo o escribe tus propias reglas.\n"
-            "2. Introduce la cadena y pulsa Reiniciar / aplicar.\n"
-            "3. Usa Paso para observar una transición o Ejecutar para animarla.\n"
-            "4. Retroceder deshace la última transición, incluso después de detenerse.\n\n"
-            "_ representa una celda en blanco. Cada símbolo ocupa un carácter.\n"
-            "L mueve a la izquierda; R a la derecha; S mantiene el cabezal.\n"
-            "La cinta se extiende en ambas direcciones; la vista sigue al cabezal.\n"
-            "La regla resaltada es la próxima que se aplicará.\n"
-            "Sin una regla aplicable, la máquina se detiene sin declarar rechazo.\n"
-            "Alcanzar el máximo de pasos solo pausa la ejecución.\n"
-            "Guardar máquina conserva la configuración, no una sesión en curso.\n"
-            "Exportar historial guarda las transiciones de la trayectoria actual en CSV."
-        ), justify="left", wraplength=950).pack(anchor="w")
-        ttk.Label(principal, textvariable=self.ultimo, wraplength=1000).pack(anchor="w", pady=(8, 0))
-        root.protocol("WM_DELETE_WINDOW", self.cerrar)
-        self.cargar()
+        self.estado_label.config(text="Estado: q0")
+        self.pasos_label.config(text="Pasos: 0/0")
+        self.resultado_label.config(text="Resultado: —")
 
-    def cargar(self):
-        anterior = self.maquina
-        super().cargar()
-        if self.maquina is not anterior:
-            self.tabla.delete(*self.tabla.get_children())
+        if hasattr(self, "historial"):
+            self.limpiar_historial()
 
-    def dibujar(self):
-        super().dibujar()
-        if not self.maquina:
+        if hasattr(self, "tabla_reglas"):
+            for elemento in self.tabla_reglas.get_children():
+                self.tabla_reglas.delete(elemento)
+
+        self.dibujar_cintas()
+
+   
+
+    def dibujar_cintas(self):
+        if not hasattr(self, "lienzos"):
             return
-        m = self.maquina
-        indices = sorted(m.cinta)
-        if indices:
-            a, b = indices[0], indices[-1]
-            fin = min(b + 1, a + 120)
-            texto = "".join(m.cinta.get(i, "_") for i in range(a, fin))
-            if fin <= b:
-                texto += "…"
-            self.salida.set(f"Cinta [{a}…{b}]: {texto}")
-        else:
-            self.salida.set("Cinta: vacía (todas las celdas están en blanco)")
-        self.reglas.tag_remove("activa", "1.0", "end")
-        if not m.terminada:
-            for numero, linea in enumerate(self.reglas.get("1.0", "end").splitlines(), 1):
-                partes = linea.split("#", 1)[0].split()
-                if len(partes) == 5 and tuple(partes[:2]) == (m.estado, m.cinta.get(m.cabezal, "_")):
-                    self.reglas.tag_add("activa", f"{numero}.0", f"{numero}.end")
-                    break
 
-    def avanzar(self):
-        m = self.maquina
-        antes = m.pasos
-        estado, pos, lee = m.estado, m.cabezal, m.cinta.get(m.cabezal, "_")
-        regla = m.reglas.get((estado, lee))
-        continuar = super().avanzar()
-        if m.pasos > antes:
-            escribe, direccion, siguiente = regla
-            item = self.tabla.insert("", "end", values=(m.pasos, estado, pos, lee, escribe, direccion, siguiente))
-            self.tabla.see(item)
-            verbo = {"L": "a la izquierda", "R": "a la derecha", "S": "sin desplazamiento"}[direccion]
-            self.ultimo.set(f"Lee {lee}, escribe {escribe}, mueve el cabezal {verbo} y cambia de {estado} a {siguiente}.")
-        return continuar
+        for cinta, lienzo, etiqueta in zip(
+            self.cintas, self.lienzos, self.etiquetas_cabezal
+        ):
+            lienzo.delete("all")
 
-    def atras(self):
-        self.pausar()
-        antes = self.maquina.pasos
-        if self.maquina.retroceder():
-            if self.maquina.pasos < antes:
-                filas = self.tabla.get_children()
-                if filas:
-                    self.tabla.delete(filas[-1])
-            self.ultimo.set("Se restauró la configuración anterior.")
-            self.dibujar()
-        else:
-            self.ultimo.set("Ya estás en la configuración inicial.")
+            ancho = lienzo.winfo_width()
+            if ancho < 100:
+                ancho = 500
 
-    def seleccionar(self, event=None):
-        self.pausar()
-        entrada, reglas, descripcion = EJEMPLOS[self.ejemplo.get()]
-        self.entrada.set(entrada)
-        self.inicial.set("q0")
-        self.acepta.set("aceptar")
-        self.rechaza.set("rechazar")
-        self.reglas.delete("1.0", "end")
-        self.reglas.insert("1.0", reglas)
-        self.descripcion.set(descripcion)
-        self.cargar()
+            celda = 36
+            cantidad = max(5, min(30, (ancho - 10) // celda))
+            inicio = cinta.cabezal - cantidad // 2
 
-    def configuracion(self):
-        return validar_configuracion(dict(version=1, entrada=self.entrada.get(),
-            reglas=self.reglas.get("1.0", "end").strip(), inicial=self.inicial.get().strip(),
-            acepta=self.acepta.get().strip(), rechaza=self.rechaza.get().strip()))
+            for i in range(cantidad):
+                posicion = inicio + i
+                x0 = 5 + i * celda
+                x1 = x0 + celda - 3
+                y0, y1 = 12, 46
 
-    def guardar(self):
-        self.pausar()
-        try:
-            datos = self.configuracion()
-            ruta = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("Máquina de Turing", "*.json")])
-            if ruta:
-                with open(ruta, "w", encoding="utf-8") as archivo:
-                    json.dump(datos, archivo, ensure_ascii=False, indent=2)
-                self.ultimo.set("Máquina guardada.")
-        except (OSError, ValueError) as error:
-            messagebox.showerror("No se pudo guardar", str(error))
+                simbolo = cinta.leer_posicion(posicion)
+                es_cabezal = posicion == cinta.cabezal
 
-    def abrir(self):
-        self.pausar()
-        ruta = filedialog.askopenfilename(filetypes=[("Máquina de Turing", "*.json")])
-        if not ruta:
-            return
-        try:
-            with open(ruta, encoding="utf-8") as archivo:
-                datos = validar_configuracion(json.load(archivo))
-            for campo in ("entrada", "inicial", "acepta", "rechaza"):
-                getattr(self, campo).set(datos[campo])
-            self.reglas.delete("1.0", "end")
-            self.reglas.insert("1.0", datos["reglas"])
-            self.ejemplo.set("")
-            self.descripcion.set("Máquina personalizada cargada desde un archivo.")
-            self.cargar()
-        except (OSError, ValueError) as error:
-            messagebox.showerror("No se pudo abrir", str(error))
+                lienzo.create_rectangle(
+                    x0, y0, x1, y1,
+                    fill="#bfdbfe" if es_cabezal else "white",
+                    outline="#2563eb" if es_cabezal else "#94a3b8",
+                    width=2 if es_cabezal else 1
+                )
 
-    def exportar(self):
-        self.pausar()
-        ruta = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("Historial CSV", "*.csv")])
-        if not ruta:
-            return
-        try:
-            with open(ruta, "w", newline="", encoding="utf-8-sig") as archivo:
-                escritor = csv.writer(archivo)
-                escritor.writerow(["Paso", "Estado", "Posición", "Lee", "Escribe", "Dirección", "Siguiente"])
-                for fila in self.tabla.get_children():
-                    escritor.writerow(self.tabla.item(fila, "values"))
-            self.ultimo.set("Historial exportado.")
-        except OSError as error:
-            messagebox.showerror("No se pudo exportar", str(error))
+                lienzo.create_text(
+                    (x0 + x1) / 2,
+                    (y0 + y1) / 2,
+                    text=simbolo,
+                    font=("Consolas", 12, "bold")
+                )
+
+                lienzo.create_text(
+                    (x0 + x1) / 2,
+                    60,
+                    text=str(posicion),
+                    fill="#64748b",
+                    font=("Consolas", 8)
+                )
+
+            etiqueta.config(text=f"Cabezal: {cinta.cabezal}")
 
     def cerrar(self):
         self.pausar()
-        self.root.destroy()
+        self.ventana.destroy()
+
+
+def main():
+    ventana = tk.Tk()
+    MaquinaTuring(ventana)
+    ventana.mainloop()
 
 
 if __name__ == "__main__":
-    ventana = tk.Tk()
-    AplicacionMejorada(ventana)
-    ventana.mainloop()
+    main()
