@@ -3,7 +3,44 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 BLANCO = "□"
-LIMITE = 100
+
+
+def leer_entero(texto):
+    """Convierte un texto en entero. Acepta un '-' al inicio."""
+    texto = texto.strip()
+    cuerpo = texto[1:] if texto.startswith("-") else texto
+
+    if not cuerpo.isdecimal():
+        raise ValueError(
+            "Introduce numeros enteros (pueden llevar signo -)."
+        )
+
+    return int(texto)
+
+
+def signo_unario(n):
+    """Simbolo que se escribe antes de los unos: '-' si es negativo."""
+    return "-" if n < 0 else ""
+
+
+def calcular(a, b, op):
+    """Devuelve (resultado, residuo). El residuo solo existe en '/'.
+
+    La division trunca hacia cero: -7 / 2 = -3 con residuo -1,
+    de modo que a = cociente * b + residuo.
+    """
+    if op == "+":
+        return a + b, None
+    if op == "-":
+        return a - b, None
+    if op == "*":
+        return a * b, None
+
+    cociente = abs(a) // abs(b)
+    if (a < 0) != (b < 0):
+        cociente = -cociente
+
+    return cociente, a - cociente * b
 
 
 class Cinta:
@@ -204,7 +241,8 @@ class MaquinaTuring:
         ttk.Label(
             principal,
             text=(
-                "□ blanco | 1 unidad unaria | X marca procesada | "
+                "□ blanco | 1 unidad unaria | - signo negativo | "
+                "X marca procesada | "
                 "R derecha | L izquierda | S permanecer"
             ),
             font=("Arial", 9)
@@ -397,27 +435,9 @@ class MaquinaTuring:
         self.pausar()
 
         try:
-            texto_a = self.a.get().strip()
-            texto_b = self.b.get().strip()
-
-            if not texto_a.isdecimal() or not texto_b.isdecimal():
-                raise ValueError(
-                    "Introduce numeros enteros no negativos."
-                )
-
-            a = int(texto_a)
-            b = int(texto_b)
+            a = leer_entero(self.a.get())
+            b = leer_entero(self.b.get())
             op = self.operacion.get()
-
-            if a > LIMITE or b > LIMITE:
-                raise ValueError(
-                    f"Los operandos deben estar entre 0 y {LIMITE}."
-                )
-
-            if op == "-" and a < b:
-                raise ValueError(
-                    "La resta produciria un resultado negativo."
-                )
 
             if op == "/" and b == 0:
                 raise ValueError("No se puede dividir entre cero.")
@@ -432,7 +452,11 @@ class MaquinaTuring:
         self.numero_b = b
         self.op = op
 
-        entrada_unaria = "1" * a + "#" + op + "#" + "1" * b
+        entrada_unaria = (
+            signo_unario(a) + "1" * abs(a)
+            + "#" + op + "#"
+            + signo_unario(b) + "1" * abs(b)
+        )
         self.cintas[0].cargar(entrada_unaria)
         self.cintas[1].cargar("")
         self.cintas[2].cargar("")
@@ -475,27 +499,37 @@ class MaquinaTuring:
         agregar("q3", "Identificar la operacion.")
         agregar("q4", "Recorrer el segundo operando.", 0, None, "R")
 
-        if op == "+":
-            for i in range(a):
-                agregar("q5", f"Copiar unidad {i + 1} de A.",
-                        1, "1", "R")
-            for i in range(b):
-                agregar("q6", f"Copiar unidad {i + 1} de B.",
-                        2, "1", "R")
+        resultado, residuo = calcular(a, b, op)
+        mag_a = abs(a)
 
-        elif op == "-":
-            for i in range(b):
-                agregar("q5", f"Procesar unidad {i + 1} de B.",
-                        1, "X", "R")
-            for i in range(a - b):
-                agregar("q6", f"Copiar unidad restante {i + 1}.",
-                        2, "1", "R")
+        if op in ("+", "-"):
+            # a - b se trata como a + (-b)
+            valor_b = b if op == "+" else -b
+            mag_b = abs(valor_b)
+
+            if (a < 0) == (valor_b < 0):
+                # Mismo signo: se suman las magnitudes.
+                for i in range(mag_a):
+                    agregar("q5", f"Copiar unidad {i + 1} de A.",
+                            1, "1", "R")
+                for i in range(mag_b):
+                    agregar("q6", f"Copiar unidad {i + 1} de B.",
+                            2, "1", "R")
+            else:
+                # Signos opuestos: se cancelan y sobra la diferencia.
+                for i in range(min(mag_a, mag_b)):
+                    agregar("q5",
+                            f"Cancelar unidad {i + 1} (signos opuestos).",
+                            1, "X", "R")
+                for i in range(abs(mag_a - mag_b)):
+                    agregar("q6", f"Copiar unidad restante {i + 1}.",
+                            2, "1", "R")
 
         elif op == "*":
-            for grupo in range(b):
+            for grupo in range(abs(b)):
                 agregar("q5", f"Iniciar grupo {grupo + 1}.",
                         1, None, "R")
-                for marca in range(a):
+                for marca in range(mag_a):
                     agregar(
                         "q6",
                         f"Copiar unidad {marca + 1} del grupo {grupo + 1}.",
@@ -503,22 +537,28 @@ class MaquinaTuring:
                     )
 
         elif op == "/":
-            cociente = a // b
-            residuo = a % b
-
-            for grupo in range(cociente):
+            for grupo in range(abs(resultado)):
                 agregar(
                     "q5", f"Procesar grupo {grupo + 1} del divisor.",
                     1, "X", "R"
                 )
-                for marca in range(b):
+                for marca in range(abs(b)):
                     agregar(
                         "q6",
                         f"Registrar unidad {marca + 1} del grupo {grupo + 1}.",
                         2, "1", "R"
                     )
 
-            agregar("q7", f"Registrar el residuo: {residuo}.")
+        if resultado == 0:
+            texto_signo = "El resultado es 0 (no lleva signo)."
+        elif resultado < 0:
+            texto_signo = "Decidir el signo: el resultado es negativo (-)."
+        else:
+            texto_signo = "Decidir el signo: el resultado es positivo (+)."
+        agregar("q7", texto_signo)
+
+        if op == "/":
+            agregar("q8", f"Registrar el residuo: {residuo}.")
 
         agregar("qf", "Terminar la secuencia de acciones.")
         return pasos
@@ -659,21 +699,15 @@ class MaquinaTuring:
 
         a, b, op = self.numero_a, self.numero_b, self.op
 
-        if op == "+":
-            resultado = a + b
-            texto = str(resultado)
-        elif op == "-":
-            resultado = a - b
-            texto = str(resultado)
-        elif op == "*":
-            resultado = a * b
-            texto = str(resultado)
-        else:
-            resultado = a // b
-            residuo = a % b
-            texto = f"Cociente = {resultado}, residuo = {residuo}"
+        resultado, residuo = calcular(a, b, op)
 
-        self.cintas[2].cargar("1" * resultado)
+        if op == "/":
+            texto = f"Cociente = {resultado}, residuo = {residuo}"
+        else:
+            texto = str(resultado)
+
+        salida = signo_unario(resultado) + "1" * abs(resultado)
+        self.cintas[2].cargar(salida)
         self.cintas[2].cabezal = 0
 
         self.estado = "q_accept"
@@ -685,7 +719,7 @@ class MaquinaTuring:
         self.registrar("Resultado: " + texto)
         self.registrar(
             "Salida unaria: " +
-            ("1" * resultado if resultado > 0 else "ε (vacia)")
+            (salida if salida else "ε (vacia)")
         )
         self.registrar("")
 
